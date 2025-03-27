@@ -5,3 +5,7 @@ __pycache__/
 # wandb
 .wandb/
 
+.git/
+
+result/
+result_diff/
