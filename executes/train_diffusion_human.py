@@ -1,34 +1,23 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('load_ext', 'autoreload')
-get_ipython().run_line_magic('autoreload', '2')
-
 import os
 import sys
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]= "4"
 
 # change path to parent directory for paths
 sys.path.append(os.path.dirname(os.getcwd()))
 os.chdir(os.path.dirname(os.getcwd()))
 
 import accelerate
-import matplotlib.pyplot as plt
 import matplotlib
-import numpy as np
-import seaborn as sns
 import torch
 import yaml
 from diffusers.optimization import get_scheduler
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
-from einops import rearrange
 
 from ldns.networks import AutoEncoder, CountWrapper
 from ldns.utils.plotting_utils import *
-from ldns.losses import latent_regularizer
 from ldns.networks import Denoiser
 from diffusers.training_utils import EMAModel
 from diffusers.schedulers import DDPMScheduler
@@ -39,13 +28,8 @@ lt.monkey_patch()
 matplotlib.rc_file('matplotlibrc')
 
 
-# In[ ]:
-
-
 ## load config and model path
-
 cfg_ae = OmegaConf.load("conf/autoencoder-human.yaml")
-
 
 cfg_yaml = """
 denoiser_model:
@@ -67,11 +51,6 @@ exp_name: diffusion_human
 cfg = OmegaConf.create(yaml.safe_load(cfg_yaml))
 cfg.dataset = cfg_ae.dataset
 
-
-# In[4]:
-
-
-
 from ldns.data.human import get_human_dataloaders
 
 # set seed
@@ -81,10 +60,6 @@ np.random.seed(cfg.training.random_seed)
 train_dataloader, val_dataloader, test_dataloader = get_human_dataloaders(
         cfg_ae.dataset.datapath, batch_size=cfg_ae.training.batch_size
     )
-
-
-# In[ ]:
-
 
 ae_model = AutoEncoder(
     C_in=cfg_ae.model.C_in,
@@ -98,7 +73,7 @@ ae_model = AutoEncoder(
 )
 
 ae_model = CountWrapper(ae_model)
-ae_model.load_state_dict(torch.load(f"exp/{cfg_ae.exp_name}/model.pt"))
+ae_model.load_state_dict(torch.load(f"results/ae_human_epoch_08250.pt"))
 
 accelerator = accelerate.Accelerator(
     mixed_precision="no",
@@ -116,10 +91,6 @@ print(cfg_ae.exp_name)
     val_dataloader,
     test_dataloader,
 )
-
-
-# In[ ]:
-
 
 from ldns.data.human import LatentHumanDataset
 
@@ -142,28 +113,12 @@ latent_dataset_test = LatentHumanDataset(
     clip=False,
 )
 
-
-# In[8]:
-
-
-display(latent_dataset_train[0])
-display(latent_dataset_train[1])
-
 element = latent_dataset_train[0]
-
-
-# In[9]:
-
 
 plt.plot(element['latent'][0])
 plt.plot(element['mask'][0])
 
 # mask and (padded) latents visualized
-
-
-# In[12]:
-
-
 train_latent_dataloader = torch.utils.data.DataLoader(
     latent_dataset_train,
     batch_size=cfg.training.batch_size,
@@ -195,13 +150,9 @@ if cfg.dataset.max_seqlen & (cfg.dataset.max_seqlen - 1) != 0:
     val_latent_dataloader,
 )
 
-
 # In[15]:
 
-
-
 ## initialize denoiser
-
 denoiser = Denoiser(
     C_in=cfg.denoiser_model.C_in + 1, # 1 for mask (length of required latent)
     C=cfg.denoiser_model.C,
@@ -249,21 +200,9 @@ lr_scheduler = get_scheduler(
 
 ema_model = EMAModel(denoiser, min_value=0.9999)
 
-
-# In[16]:
-
-
-
 from ldns.utils import count_parameters
 
 print(count_parameters(denoiser)/1e6, "M parameters")
-
-
-denoiser
-
-
-# In[17]:
-
 
 def sample_spikes_with_mask(ema_denoiser, scheduler, ae, cfg, lengths=None, batch_size=1, device="cuda"):
     """Sample spike trains from the diffusion model with variable length masks.
@@ -419,7 +358,8 @@ def plot_real_vs_sampled_rates_and_spikes(
             ax.set_yticks([])
 
     fig.tight_layout()
-    plt.show()
+    # plt.show()
+    plt.savefig("results_diff/plt/diff_human_epoch_" + str(epoch).zfill(5) + ".png")
 
 
 # In[19]:
@@ -515,15 +455,8 @@ for epoch in pbar:
             batch_idx=1,
         )
 
+        # save model
+        torch.save(ema_model.averaged_model.state_dict(),
+                   f"results_diff/diff_human_epoch_" + str(epoch).zfill(5) + ".pt")
+
 pbar.close()
-
-
-# In[23]:
-
-
-# save model
-os.makedirs(f"exp/{cfg.exp_name}", exist_ok=True)
-torch.save(ema_model.averaged_model.state_dict(), f"exp/{cfg.exp_name}/model.pt")
-
-
-# We evaluate the model in `notebooks/plotting_diffusion_human.ipynb`

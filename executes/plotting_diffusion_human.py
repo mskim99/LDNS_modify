@@ -1,35 +1,23 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
-get_ipython().run_line_magic('load_ext', 'autoreload')
-get_ipython().run_line_magic('autoreload', '2')
-
 import os
 import sys
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]= "4"
 
 # change path to parent directory for paths
 sys.path.append(os.path.dirname(os.getcwd()))
 os.chdir(os.path.dirname(os.getcwd()))
 
 import accelerate
-import matplotlib.pyplot as plt
 import matplotlib
-import numpy as np
 import torch
-import yaml
-from diffusers.optimization import get_scheduler
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 from einops import rearrange
 
 from ldns.networks import AutoEncoder, CountWrapper
 from ldns.utils.plotting_utils import *
-from ldns.losses import latent_regularizer
 from ldns.networks import Denoiser
-from diffusers.training_utils import EMAModel
 from diffusers.schedulers import DDPMScheduler
 
 import lovely_tensors as lt
@@ -45,20 +33,11 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib.font_manager")
 warnings.filterwarnings("ignore", message="findfont: Generic family")
 
-
-# In[2]:
-
-
 # load config and model path
-
 cfg_ae = OmegaConf.load("conf/autoencoder-human.yaml")
 cfg = OmegaConf.load("conf/diffusion_human.yaml")
 
 cfg.dataset = cfg_ae.dataset
-
-
-# In[ ]:
-
 
 from ldns.data.human import get_human_dataloaders
 
@@ -72,10 +51,6 @@ train_dataloader, val_dataloader, test_dataloader = get_human_dataloaders(
     shuffle_train=False,  # for eval
 )
 
-
-# In[ ]:
-
-
 ae_model = AutoEncoder(
     C_in=cfg_ae.model.C_in,
     C=cfg_ae.model.C,
@@ -88,7 +63,7 @@ ae_model = AutoEncoder(
 )
 
 ae_model = CountWrapper(ae_model)
-ae_model.load_state_dict(torch.load(f"exp/stored_models/{cfg_ae.exp_name}/model.pt"))
+ae_model.load_state_dict(torch.load(f"results/ae_human_epoch_08000.pt"))
 
 accelerator = accelerate.Accelerator(mixed_precision="no")
 
@@ -130,28 +105,12 @@ latent_dataset_test = LatentHumanDataset(
     clip=False,
 )
 
-
-# In[ ]:
-
-
-display(latent_dataset_train[0])
-display(latent_dataset_train[1])
-
 element = latent_dataset_train[0]
-
-
-# In[ ]:
-
 
 plt.plot(element["latent"][1])
 plt.plot(element["mask"][0])
 
 # mask and (padded) latents visualized
-
-
-# In[9]:
-
-
 train_latent_dataloader = torch.utils.data.DataLoader(
     latent_dataset_train,
     batch_size=cfg.training.batch_size,
@@ -183,12 +142,7 @@ if cfg.dataset.max_seqlen & (cfg.dataset.max_seqlen - 1) != 0:
     val_latent_dataloader,
 )
 
-
-# In[10]:
-
-
 ## initialize denoiser
-
 denoiser = Denoiser(
     C_in=cfg.denoiser_model.C_in + 1,  # 1 for mask (length of required latent)
     C=cfg.denoiser_model.C,
@@ -197,7 +151,7 @@ denoiser = Denoiser(
     bidirectional=cfg.denoiser_model.get("bidirectional", True),
 )
 
-denoiser.load_state_dict(torch.load(f"exp/stored_models/{cfg.exp_name}/model.pt"))  # load after training
+denoiser.load_state_dict(torch.load(f"results_diff/diff_human_epoch_01950.pt"))  # load after training
 
 scheduler = DDPMScheduler(
     num_train_timesteps=cfg.denoiser_model.num_train_timesteps,
@@ -331,10 +285,6 @@ def reconstruct_spikes(model, dataloader):
         "signal_masks": torch.cat(signal_masks, 0),
     }
 
-
-# In[12]:
-
-
 def plot_real_vs_sampled_rates_and_spikes(
     real_rates,
     sampled_rates,
@@ -406,15 +356,12 @@ def plot_real_vs_sampled_rates_and_spikes(
             ax.set_yticks([])
 
     fig.tight_layout()
-    plt.show()
+    # plt.show()
+    plt.savefig("results_diff/plt/plot_diff_human_rate_spike.png")
 
 
 # ##  Evaluation
-# 
 # We first generate spikes from the trained model using the `sample_spikes_with_mask` function, and then compare with the ground truth spikes.
-
-# In[ ]:
-
 
 ret_dict = sample_spikes_with_mask(
     denoiser,
@@ -427,10 +374,6 @@ ret_dict = sample_spikes_with_mask(
     ],  # corresponding to 1/6 of training data
     device="cuda",
 )
-
-
-# In[14]:
-
 
 # get training spikes and masks, using only 1/6 of the data for faster evaluation
 (
@@ -473,10 +416,6 @@ plt.xlabel("trial length (s)")
 # print average trial length in seconds
 print(f"{spikes_train_len.mean()/50}")
 
-
-# In[16]:
-
-
 # get spikes and masks from diffusion model output
 sampled_spikes, sampled_masks = ret_dict["spikes"], ret_dict["masks"]
 
@@ -494,10 +433,6 @@ for i in range(len(sampled_spikes)):
 
     # append trimmed sequence to list
     sampled_spikes_trimmed.append(spike_)
-
-
-# In[17]:
-
 
 # we do the same thing for the autoencoder reconstruction
 
@@ -521,19 +456,11 @@ for i in range(len(rec_train_spikes)):
     # append trimmed sequence to list
     rec_train_spikes_trimmed.append(spike_)
 
-
-# In[18]:
-
-
 # concatenate all trimmed spike sequences along time dimension
 # this gives us one long sequence per neuron
 sampled_spikes_trimmed_cat = torch.cat(sampled_spikes_trimmed, dim=-1)  # sampled spikes from diffusion model
 train_spikes_trimmed_cat = torch.cat(train_spikes_trimmed, dim=-1)  # original training data spikes
 rec_train_spikes_trimmed_cat = torch.cat(rec_train_spikes_trimmed, dim=-1)  # reconstructed spikes from autoencoder
-
-
-# In[19]:
-
 
 # plotting correlation matrix, compute neuron-neuron correlation
 
@@ -543,10 +470,6 @@ corrcoefs_rec = np.corrcoef(rec_train_spikes_trimmed_cat)
 np.fill_diagonal(corrcoefs_train, 0)
 np.fill_diagonal(corrcoefs_sampled, 0)
 np.fill_diagonal(corrcoefs_rec, 0)
-
-
-# In[ ]:
-
 
 fig, ax = plt.subplots(1, 3, figsize=cm2inch(9.8, 3), dpi=300)
 
@@ -618,8 +541,8 @@ cbar.set_ticks([0.0, 0.5])
 cbar.set_ticklabels([0.0, 0.5])
 
 fig.tight_layout()
-plt.show()
-
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_neuron_corr.png")
 
 print(
     corrcoefs_sampled.min(),
@@ -627,10 +550,6 @@ print(
     corrcoefs_train.min(),
     corrcoefs_train.max(),
 )
-
-
-# In[ ]:
-
 
 fig = plt.figure(figsize=cm2inch(4, 4), dpi=300)
 
@@ -670,20 +589,11 @@ plt.legend()
 x = np.linspace(min_global, max_global, 10)
 plt.plot(x, x, "k--", zorder=-10, alpha=0.99)
 
-
-# In[22]:
-
-
 # for population spike count
 summed_spikes_train = np.concatenate([t.sum(0) for t in train_spikes_trimmed])
 summed_spikes_sampled = np.concatenate([t.sum(0) for t in sampled_spikes_trimmed])
 
-
-# In[28]:
-
-
 # for spike stats (isi), convert to spiketrain. This might be a bit slow.
-
 from ldns.utils.eval_utils import counts_to_spike_trains_ragged
 
 fps = 1000 / 20
@@ -693,10 +603,6 @@ spike_trains_train_spiketrain = counts_to_spike_trains_ragged(
 spike_trains_sampled_spiketrain = counts_to_spike_trains_ragged(
     [t.permute(1, 0).numpy() for t in sampled_spikes_trimmed], fps=fps
 )
-
-
-# In[29]:
-
 
 # compute spike stats
 from ldns.utils.eval_utils import compute_spike_stats_per_neuron
@@ -714,10 +620,6 @@ spike_stats_sampled = compute_spike_stats_per_neuron(
     n_neurons=sampled_spikes_trimmed[0].shape[0],
     mean_output=False,
 )
-
-
-# In[ ]:
-
 
 from scipy.stats import gaussian_kde
 
@@ -745,7 +647,8 @@ density_gt /= density_gt.sum()
 bins_psc = np.arange(-0.5, 220 - 0.5, 1)
 ax[0].hist(gt_spikes, bins=bins_psc, density=True, alpha=0.5, label="data", color="grey", rasterized=True)
 ax[0].hist(
-    sampled_spikes_trimmed_cat, bins=bins_psc, density=True, alpha=0.5, label="ldns", color="darkred", rasterized=True
+    sampled_spikes_trimmed_cat, bins=bins_psc, density=True, alpha=0.5, label="ldns",
+    color=["darkred"]*len(sampled_spikes_trimmed_cat), rasterized=True
 )
 ax[0].plot(x_grid, density_gt, ".-", label="data kde", color="black", rasterized=False)
 ax[0].plot(x_grid, density_model, ".-", label="ldns kde", color="darkred", rasterized=False)
@@ -820,10 +723,6 @@ ax[3].set_ylim(data_limis_ax)
 ax[3].set_xticks([0.05, 0.15])
 ax[3].set_yticks([0.05, 0.15])
 
-
-# In[ ]:
-
-
 # create figure with two subplots for comparing correlation matrices
 fig, ax = plt.subplots(1, 2, figsize=cm2inch(6.5, 3), dpi=300)
 
@@ -842,10 +741,6 @@ ax[1].axis("off")
 # adjust spacing between subplots
 fig.tight_layout()
 
-
-# In[ ]:
-
-
 # create figure with two subplots for comparing correlation matrices
 fig, ax = plt.subplots(1, 2, figsize=cm2inch(6.5, 3), dpi=300)
 
@@ -863,10 +758,6 @@ ax[1].axis("off")
 
 # adjust spacing between subplots
 fig.tight_layout()
-
-
-# In[ ]:
-
 
 # plot two examples of ground truth spike trains
 fig = plt.figure(figsize=cm2inch(6, 2), dpi=300)
@@ -880,7 +771,8 @@ plt.xticks([])
 plt.gca().spines["bottom"].set_visible(False)
 plt.yticks([])
 plt.ylabel("neurons")
-plt.show()
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_gt_spikes_first.png")
 
 # plot second example
 fig = plt.figure(figsize=cm2inch(6, 2), dpi=300)
@@ -895,11 +787,8 @@ plt.xlabel("time (s)")
 # clean up y axis
 plt.yticks([])
 plt.ylabel("neurons")
-plt.show()
-
-
-# In[ ]:
-
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_gt_spikes_second.png")
 
 # plot three examples of sampled spike trains
 fig = plt.figure(figsize=cm2inch(6, 2), dpi=300)
@@ -920,7 +809,8 @@ plt.xticks([])
 plt.gca().spines["bottom"].set_visible(False)
 plt.yticks([])
 plt.ylabel("neurons")
-plt.show()
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_sampled_spikes_first.png")
 
 # plot second example
 fig = plt.figure(figsize=cm2inch(6, 2), dpi=300)
@@ -933,7 +823,8 @@ plt.xticks([])
 plt.gca().spines["bottom"].set_visible(False)
 plt.yticks([])
 plt.ylabel("neurons")
-plt.show()
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_sampled_spikes_second.png")
 
 # plot third example with time axis
 fig = plt.figure(figsize=cm2inch(6, 2), dpi=300)
@@ -947,18 +838,13 @@ plt.gca().set_xticklabels([0, 10])
 plt.xlabel("time (s)")
 plt.yticks([])
 plt.ylabel("neurons")
-plt.show()
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_sampled_spikes_third.png")
 
 
 # ### PCA of smoothed spikes, data vs sampled
-# 
 # We will train PCA on one subset of smoothed spikes and transform the other subset to compare the latent spaces
-# 
 # We will also compare this to the latent space of sampled spikes from the diffusion model
-# 
-
-# In[ ]:
-
 
 # import required packages for PCA and signal processing
 from sklearn.preprocessing import StandardScaler
@@ -974,10 +860,6 @@ num_bins_std = int(win_std / time_per_bin)  # convert std from seconds to bins
 # create gaussian smoothing window
 smo_window = signal.windows.gaussian(int(win_len * num_bins_std), num_bins_std)
 smo_window /= smo_window.sum()  # normalize window to sum to 1
-
-
-# In[ ]:
-
 
 # get ground truth spike data
 ground_truth_spikes = train_spikes_trimmed
@@ -1004,18 +886,10 @@ smoothed_test = [smoothed_spikes[i] for i in range(len(smoothed_spikes)) if i no
 
 print(len(smoothed_train), len(smoothed_test))
 
-
-# In[ ]:
-
-
 # train PCA on one subset, transform the other
 smoothed_train_reshaped = [rearrange(t, "c l -> l c") for t in smoothed_train]
 smoothed_train_concat = np.concatenate(smoothed_train_reshaped, axis=0)
 print(smoothed_train_concat.shape)
-
-
-# In[ ]:
-
 
 # get number of test samples
 num_smoothed_test = len(smoothed_test)
@@ -1030,10 +904,6 @@ smoothed_test_reshaped = [rearrange(t, "c l -> l c") for t in smoothed_test]
 smoothed_test_concat = np.concatenate(smoothed_test_reshaped, axis=0)
 print(smoothed_test_concat.shape)
 
-
-# In[ ]:
-
-
 # standardize training data by removing mean and scaling to unit variance
 scaler = StandardScaler()
 train_data_standardized = scaler.fit_transform(smoothed_train_concat)
@@ -1041,12 +911,6 @@ train_data_standardized = scaler.fit_transform(smoothed_train_concat)
 # fit PCA to reduce dimensionality to 4 components
 pca = PCA(n_components=4)
 pca.fit(train_data_standardized)
-
-
-# In[ ]:
-
-
-from einops import pack, unpack
 
 # transform ground truth data using fitted PCA and scaler
 gt_transformed = pca.transform(scaler.transform(smoothed_test_concat))
@@ -1056,10 +920,6 @@ gt_transformed_sequences = []
 for i, length in enumerate(np.cumsum(smoothed_test_lengths)):
     seq_start = length - smoothed_test_lengths[i]
     gt_transformed_sequences.append(gt_transformed[seq_start:length])
-
-
-# In[ ]:
-
 
 # transform sampled spikes data similar to ground truth data
 # convert pytorch tensors to numpy arrays
@@ -1079,10 +939,6 @@ smoothed_reshaped = [rearrange(t, "c l -> l c") for t in smoothed_sampled]
 # concatenate all sequences into single array
 smoothed_sampled_concat = np.concatenate(smoothed_reshaped, axis=0)
 
-
-# In[ ]:
-
-
 # standardize smoothed sampled data using fitted scaler
 sampled_spikes_trimmed_smoothed_standardized = scaler.transform(smoothed_sampled_concat)
 
@@ -1095,10 +951,6 @@ for i, length in enumerate(np.cumsum(smoothed_sampled_lengths)):
     sampled_transformed.append(
         sampled_spikes_trimmed_smoothed_transformed[length - smoothed_sampled_lengths[i] : length]
     )
-
-
-# In[ ]:
-
 
 # create figure with 2x2 subplots for comparing ground truth vs sampled trajectories in PC space
 fig, ax = plt.subplots(2, 2, figsize=cm2inch(6, 10), dpi=300, sharey=True)
@@ -1139,5 +991,6 @@ ax[0, 0].set_title("gt")
 ax[0, 1].set_title("ldns")
 
 plt.tight_layout()
-plt.show()
+# plt.show()
+plt.savefig("results_diff/plt/plot_diff_human_pca.png")
 

@@ -154,8 +154,8 @@ denoiser = Denoiser(
     bidirectional=cfg.denoiser_model.get("bidirectional", True),
 )
 
-ae_model.load_state_dict(torch.load(f"results/ae_lorenz_epoch_04000.pt", map_location="cpu"))
-denoiser.load_state_dict(torch.load(f"results_diff/diff_lorenz_epoch_00900.pt", map_location="cpu"))
+ae_model.load_state_dict(torch.load(f"results/ae_lorenz_epoch_14000.pt", map_location="cpu"))
+# denoiser.load_state_dict(torch.load(f"results_diff/diff_lorenz_epoch_00900.pt", map_location="cpu"))
 
 scheduler = DDPMScheduler(
     num_train_timesteps=cfg.denoiser_model.num_train_timesteps,
@@ -271,7 +271,7 @@ def sample(
 # sampled rates will be very high and erratic at the beginning of the training,
 # but will settle down to the true range by the end
 # this is expected behavior
-pbar = tqdm(range(900, cfg.training.num_epochs), desc="epochs")
+pbar = tqdm(range(0, cfg.training.num_epochs), desc="epochs")
 for epoch in pbar:
     for i, batch in enumerate(train_latent_dataloader):
 

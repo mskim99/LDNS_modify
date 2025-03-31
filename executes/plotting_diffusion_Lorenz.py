@@ -9,12 +9,7 @@ sys.path.append(os.path.dirname(os.getcwd()))
 os.chdir(os.path.dirname(os.getcwd()))
 
 import accelerate
-import matplotlib.pyplot as plt
 import matplotlib
-import numpy as np
-import torch
-import yaml
-from diffusers.optimization import get_scheduler
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 from einops import rearrange
@@ -23,7 +18,6 @@ from ldns.data.latent_attractor import get_attractor_dataloaders, LatentDataset
 from ldns.networks import AutoEncoder, CountWrapper
 from ldns.utils.plotting_utils import *  # all plotting functions
 from ldns.networks import Denoiser
-from ldns.utils.plotting_utils import evaluate_autoencoder
 from diffusers.training_utils import EMAModel
 from diffusers.schedulers import DDPMScheduler
 
@@ -56,7 +50,7 @@ ae_model = AutoEncoder(
 ae_model = CountWrapper(ae_model)
 
 # load model we trained
-ae_model.load_state_dict(torch.load(f"results/ae_lorenz_epoch_04000.pt", map_location="cpu"))
+ae_model.load_state_dict(torch.load(f"results/ae_lorenz_epoch_14000.pt", map_location="cpu"))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -158,7 +152,7 @@ scheduler = DDPMScheduler(
     beta_schedule="linear",
 )
 
-denoiser.load_state_dict(torch.load(f"results_diff/diff_lorenz_epoch_03000.pt", map_location="cpu"))
+denoiser.load_state_dict(torch.load(f"results_diff/diff_lorenz_epoch_20000.pt", map_location="cpu"))
 
 (denoiser, latent_dataset_train, latent_dataset_val, latent_dataset_test) = accelerator.prepare(
     denoiser, latent_dataset_train, latent_dataset_val, latent_dataset_test
@@ -202,10 +196,6 @@ ax2.legend(loc="upper left", bbox_to_anchor=(1.5, 1))
 ax[2].set_xlabel("time (s)")
 ax[2].set_ylabel("rate (Hz)")
 ax[0].set_xlim(-2, 128)
-
-
-# In[18]:
-
 
 def sample(ema_denoiser, scheduler, cfg, batch_size=1, generator=None, device="cuda", signal_length=None):
     """Sample from a trained diffusion model.
@@ -648,6 +638,7 @@ for i, (key, val) in enumerate(spikes_dict.items()):
     ax[3].set_ylim(data_limis_ax)
 
     plt.tight_layout()
+    plt.savefig("results_diff/plt/diff_lorenz_plotting.png")
 
     # compute correlations between ground truth and model
     from scipy.stats import pearsonr

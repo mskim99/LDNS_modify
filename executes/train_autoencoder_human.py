@@ -1,30 +1,20 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('load_ext', 'autoreload')
-get_ipython().run_line_magic('autoreload', '2')
-
 import os
 import sys
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]= "4"
 
 # append parent directory to path (../notebooks -> ..)
 sys.path.append(os.path.dirname(os.getcwd()))
 os.chdir(os.path.dirname(os.getcwd()))
 
 import accelerate
-import matplotlib.pyplot as plt
 import matplotlib
-import numpy as np
-import torch
 import yaml
 from diffusers.optimization import get_scheduler
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
-from ldns.data.human import get_human_dataloaders
 from ldns.networks import AutoEncoder, CountWrapper
 from ldns.utils.plotting_utils import *
 from ldns.losses import latent_regularizer
@@ -33,11 +23,6 @@ import lovely_tensors as lt
 lt.monkey_patch()
 
 matplotlib.rc_file('matplotlibrc')
-
-
-# In[ ]:
-
-
 
 cfg_yaml = """
 model:
@@ -55,7 +40,7 @@ dataset:
   max_seqlen: 512
 training:
   lr: 0.001
-  num_epochs: 400
+  num_epochs: 20000
   num_warmup_epochs: 20
   batch_size: 256
   random_seed: 42
@@ -75,10 +60,6 @@ cfg = OmegaConf.create(yaml.safe_load(cfg_yaml))
 with open(f"conf/{cfg.exp_name}.yaml", "w") as f:
     f.write(OmegaConf.to_yaml(cfg))
 
-
-# In[ ]:
-
-
 from ldns.data.human import get_human_dataloaders
 
 # set seed
@@ -89,20 +70,11 @@ train_dataloader, val_dataloader, test_dataloader = get_human_dataloaders(
     cfg.dataset.datapath, batch_size=cfg.training.batch_size, max_seqlen=cfg.dataset.max_seqlen
 )
 
-
-# In[4]:
-
-
 # visualize a datapoint
 plt.imshow(train_dataloader.dataset[0]['signal'], aspect='auto', cmap='Greys')
 plt.colorbar()
 
 # the datapoint will be padded and masked to max_seqlen (512 here)
-
-
-# In[5]:
-
-
 # set device to cuda if available, otherwise cpu
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -123,6 +95,7 @@ print("Number of params", sum(p.numel() for p in ae.parameters() if p.requires_g
 
 # wrap model to track parameter counts
 ae = CountWrapper(ae)
+ae.load_state_dict(torch.load(f"results/ae_human_epoch_00250.pt", map_location="cpu"))
 print(ae)
 
 # move model to device
@@ -167,10 +140,6 @@ accelerator = accelerate.Accelerator(
     val_dataloader,
     test_dataloader,
 )
-
-
-# In[7]:
-
 
 # define poisson loss criterion for spike count prediction
 # reduction="none" to apply masking later
@@ -226,7 +195,7 @@ def compute_val_loss(net, dataloader):
             alpha=0.5,
             color="grey",
         )
-        plt.legend()
+        plt.legend(('spikes', 'rates', 'pred'))
     plt.close(fig)
 
     return avg_poisson_loss
@@ -236,8 +205,6 @@ def compute_val_loss(net, dataloader):
 
 
 from ldns.utils.plotting_utils import cm2inch
-from einops import rearrange
-
 
 def plot_rate_traces_real(model, dataloader, figsize=(12, 5), idx=0):
     """Plot predicted firing rates and spikes for selected channels.
@@ -296,10 +263,11 @@ def plot_rate_traces_real(model, dataloader, figsize=(12, 5), idx=0):
         )
         ax[i].set_title(f"channel {channel}")
 
-    ax[-1].legend()
+    ax[-1].legend(('spikes', 'rates', 'pred'))
     fig.suptitle("rate traces for channels")
     fig.tight_layout()
-    plt.show()
+    plt.savefig("results/plt/ae_human_epoch_" + str(epoch).zfill(5) + "_rt.png")
+    # plt.show()
 
 
 def imshow_rates_real(model, dataloader, figsize=(12, 5), idx=0):
@@ -345,19 +313,14 @@ def imshow_rates_real(model, dataloader, figsize=(12, 5), idx=0):
     plt.colorbar(im1, ax=ax[0])
     plt.colorbar(im2, ax=ax[1])
 
-    ax[-1].legend()
+    ax[-1].legend(('spikes', 'rates', 'pred'))
     ax[0].set_title("Inferred rates")
     ax[1].set_title("Spikes")
 
     fig.suptitle(f"infeered rates, idx {idx}")
     fig.tight_layout()
-    plt.show()
-
-
-# ## training loop
-
-# In[ ]:
-
+    plt.savefig("results/plt/ae_human_epoch_" + str(epoch).zfill(5) + "_ir.png")
+    # plt.show()
 
 # train loop
 criterion_poisson = torch.nn.PoissonNLLLoss(log_input=False, full=True, reduction="none")
@@ -366,7 +329,7 @@ criterion_poisson = torch.nn.PoissonNLLLoss(log_input=False, full=True, reductio
 rec_losses, latent_losses, total_losses, lrs, val_rate_losses = [], [], [], [], []
 avg_poisson_loss, avg_rate_loss = 0, 0
 
-with tqdm(range(0, cfg.training.num_epochs)) as pbar:
+with tqdm(range(250, cfg.training.num_epochs)) as pbar:
     for epoch in pbar:
         ae.train()
 
@@ -443,14 +406,6 @@ with tqdm(range(0, cfg.training.num_epochs)) as pbar:
             ae.eval()
             plot_rate_traces_real(ae, val_dataloader, figsize=(12, 5), idx=1)
             imshow_rates_real(ae, val_dataloader, figsize=(12, 5), idx=1)
-            
 
-
-# In[ ]:
-
-
-# save checkpoint
-torch.save(accelerator.unwrap_model(ae).state_dict(), f"exp/{cfg.exp_name}/model.pt")
-
-
-# We use the trained autoencoder for diffusion model training in `notebooks/train_diffusion_human.ipynb`.
+        if epoch % 250 == 0:
+            torch.save(accelerator.unwrap_model(ae).state_dict(), f"results/ae_human_epoch_" + str(epoch).zfill(5) + ".pt")

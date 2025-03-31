@@ -8,5 +8,7 @@ __pycache__/
 .git/
 .idea/
 
-result/
+result_ae/
 result_diff/
+
+*.txt
